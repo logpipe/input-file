@@ -4,7 +4,8 @@ import "testing"
 import "github.com/logpipe/logpipe/engine"
 
 func TestFileInput(t *testing.T) {
-	input := &FileInput{path: "data.json", delim: '\n'}
+	spec := FileInputSpec{Path: "*.json", Delim: '\n'}
+	input := NewFileInput("file", spec)
 	engine.DebugInput(input)
 	engine.Wait()
 }

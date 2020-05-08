@@ -1,62 +1,87 @@
 package main
 
 import (
-	"bufio"
 	"github.com/logpipe/logpipe/config"
 	"github.com/logpipe/logpipe/core"
 	"github.com/logpipe/logpipe/plugin"
-	"os"
+	"strings"
 )
 
 func Register() {
 	plugin.RegisterInputBuilder(&FileInputBuilder{})
+
+}
+
+type FileInputSpec struct {
+	Path    string
+	Delim   byte
+	Include string
+	Exclude string
 }
 
 type FileInput struct {
 	core.BaseInput
-	path  string
-	delim byte
-	file  *os.File
-	stop  chan struct{}
+	spec     FileInputSpec
+	stop     chan struct{}
+	consumer func(event core.Event)
+	scanner  *FileScanner
+	readers  map[string]*FileReader
+}
+
+func NewFileInput(name string, spec FileInputSpec) *FileInput {
+	readers := make(map[string]*FileReader)
+	return &FileInput{spec: spec, readers: readers}
 }
 
 func (i *FileInput) Start(consumer func(event core.Event)) error {
-	file, err := os.OpenFile(i.path, os.O_RDONLY, os.ModeAppend)
+	i.consumer = consumer
+	spec := i.spec
+	paths := strings.Split(spec.Path, ";")
 
-	if err != nil {
-		return err
-	}
-	i.file = file
+	scanner := NewFileScanner(paths, 10, spec.Include, spec.Exclude)
+	scanner.Start()
+
+	i.scanner = scanner
 	go func() {
-		reader := bufio.NewReader(i.file)
 		for {
 			select {
 			case <-i.stop:
-				break
-			default:
-			}
-			line, e := reader.ReadString(i.delim)
-			if e == nil {
-				var source interface{} = line
-				if i.Codec() != nil {
-					event, e := i.Codec().Decode(source)
-					if e == nil {
-						consumer(event)
-					}
-				} else {
-					event := core.NewEvent(source)
-					consumer(event)
+				return
+			case f := <-scanner.Files:
+				if _, ok := i.readers[f]; !ok {
+					reader := NewFileReader(f, spec.Delim, i.accept)
+					reader.Start()
+					i.readers[f] = reader
 				}
 			}
 		}
 	}()
+
 	return nil
+}
+
+func (i *FileInput) accept(line string) {
+	if i.consumer != nil {
+		var source interface{} = line
+		if i.Codec() != nil {
+			event, e := i.Codec().Decode(source)
+			if e == nil {
+				i.consumer(event)
+			}
+		} else {
+			event := core.NewEvent(source)
+			i.consumer(event)
+		}
+	}
 }
 
 func (i *FileInput) Stop() error {
 	i.stop <- struct{}{}
-	err := i.file.Close()
-	return err
+	i.scanner.Stop()
+	for _, r := range i.readers {
+		r.Stop()
+	}
+	return nil
 }
 
 type FileInputBuilder struct {
@@ -66,12 +91,9 @@ func (b *FileInputBuilder) Kind() string {
 	return "file"
 }
 
-func (b *FileInputBuilder) Build(name string, spec config.Value) core.Input {
-	path := spec.GetString("path")
-	delimValue := spec.Get("delim")
-	var delim byte = '\n'
-	if !delimValue.IsEmpty() {
-		delim = byte(delimValue.Int())
-	}
-	return &FileInput{path: path, delim: delim}
+func (b *FileInputBuilder) Build(name string, specValue config.Value) core.Input {
+	spec := FileInputSpec{}
+	specValue.Parse(&spec)
+
+	return NewFileInput(name, spec)
 }
