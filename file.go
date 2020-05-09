@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const STATE_FILE = "state.json"
+
 func Register() {
 	plugin.RegisterInputBuilder(&FileInputBuilder{})
 
@@ -25,6 +27,7 @@ type FileInput struct {
 	stop     chan struct{}
 	consumer func(event core.Event)
 	scanner  *FileScanner
+	syncer   *FileStateSyncer
 	readers  map[string]*FileReader
 }
 
@@ -34,6 +37,7 @@ func NewFileInput(name string, spec FileInputSpec) *FileInput {
 }
 
 func (i *FileInput) Start(consumer func(event core.Event)) error {
+
 	i.consumer = consumer
 	spec := i.spec
 	paths := strings.Split(spec.Path, ";")
@@ -43,13 +47,15 @@ func (i *FileInput) Start(consumer func(event core.Event)) error {
 
 	i.scanner = scanner
 	go func() {
+		path := i.Context().Path()
+		i.syncer = NewFileStateSyncer(path, 30)
 		for {
 			select {
 			case <-i.stop:
 				return
 			case f := <-scanner.Files:
 				if _, ok := i.readers[f]; !ok {
-					reader := NewFileReader(f, spec.Delim, i.accept)
+					reader := NewFileReader(f, spec.Delim, i.syncer, i.accept)
 					reader.Start()
 					i.readers[f] = reader
 				}

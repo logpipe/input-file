@@ -70,7 +70,9 @@ func (s *FileScanner) walk(path string) {
 			}
 		}
 	} else {
-		s.accept(path)
+		if filepath.IsAbs(path) && stat.Mode().IsRegular() {
+			s.accept(path)
+		}
 	}
 }
 
